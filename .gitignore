@@ -1,5 +1,6 @@
 ml-32m.zip
 ml-32m/
+processed_data/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
