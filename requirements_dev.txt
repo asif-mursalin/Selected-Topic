@@ -1,0 +1,12 @@
+pandas
+scipy
+matplotlib
+seaborn
+scikit-learn
+streamlit
+joblib
+tqdm
+scikit-surprise
+tensorflow
+tensorflow_datasets
+numpy==1.25.2
