@@ -1,11 +1,4 @@
-# Core dependencies
-numpy==1.24.3
-pandas==1.5.3
-matplotlib==3.7.1
-seaborn==0.12.2
-
-# Needed for pickle loading
-cloudpickle==2.2.1
-
-# For interactive visualizations (if using)
-plotly==5.14.1
+streamlit
+pandas
+numpy
+matplotlib
