@@ -532,7 +532,7 @@ def user_authentication():
         st.session_state.preferred_genres = []
         
     if 'min_rating' not in st.session_state:
-        st.session_state.min_rating = 3.0
+        st.session_state.min_rating = 0.0
     
     # If not logged in, show login form
     if not st.session_state.logged_in:
@@ -606,7 +606,7 @@ def user_authentication():
             "Minimum Rating",
             min_value=0.0,
             max_value=5.0,
-            value=st.session_state.min_rating,
+            value=0 if 'min_rating' not in st.session_state else st.session_state.min_rating,
             step=0.5,
             help="Only show movies with predicted ratings at or above this value"
         )
@@ -904,6 +904,8 @@ def display_movie_details_page(movies_df, ratings_df, model):
             # For demo purposes, let's just show how this would affect recommendations
             st.info("Your recommendations will be updated based on this rating.")
 
+# Fix for the display_search_page function
+
 def display_search_page(movies_df, ratings_df):
     """Display search page for finding movies"""
     st.title("Search Movies")
@@ -955,7 +957,7 @@ def display_search_page(movies_df, ratings_df):
                     cols = st.columns(3)
                     for j in range(3):
                         if i + j < len(search_results):
-                            display_movie_card(search_results.iloc[i + j], cols[j])
+                            display_movie_card(search_results.iloc[i + j], cols[j], section="search")
             else:
                 st.info(f"No movies found matching '{search_query}' with minimum rating of {min_search_rating}.")
     
@@ -973,9 +975,22 @@ def display_search_page(movies_df, ratings_df):
         # Create multiselect for genres
         selected_genres = st.multiselect("Select genres", all_genres)
         
-        # Year range
-        min_year = int(movies_df['year'].min()) if 'year' in movies_df.columns else 1900
-        max_year = int(movies_df['year'].max()) if 'year' in movies_df.columns else 2025
+        # Year range - Safely get min and max years
+        try:
+            # Convert year column to numeric, coercing errors to NaN
+            if 'year' in movies_df.columns:
+                numeric_years = pd.to_numeric(movies_df['year'], errors='coerce')
+                valid_years = numeric_years.dropna()
+                if len(valid_years) > 0:
+                    min_year = int(valid_years.min())
+                    max_year = int(valid_years.max())
+                else:
+                    min_year, max_year = 1900, 2025
+            else:
+                min_year, max_year = 1900, 2025
+        except Exception as e:
+            st.warning(f"Error processing year data: {e}")
+            min_year, max_year = 1900, 2025
         
         year_range = st.slider("Release year range", min_year, max_year, (min_year, max_year))
         
@@ -1000,10 +1015,16 @@ def display_search_page(movies_df, ratings_df):
             else:
                 filtered_movies = movies_df.copy()
             
-            # Filter by year
+            # Filter by year - safely handle string years
             if 'year' in filtered_movies.columns:
-                filtered_movies = filtered_movies[(filtered_movies['year'].astype(int) >= year_range[0]) & 
-                                               (filtered_movies['year'].astype(int) <= year_range[1])]
+                # Convert year column to numeric for comparison
+                filtered_movies['year_numeric'] = pd.to_numeric(filtered_movies['year'], errors='coerce')
+                filtered_movies = filtered_movies[
+                    (filtered_movies['year_numeric'] >= year_range[0]) & 
+                    (filtered_movies['year_numeric'] <= year_range[1])
+                ]
+                # Drop the temporary column
+                filtered_movies = filtered_movies.drop('year_numeric', axis=1)
             
             # Filter by rating if needed
             if min_adv_rating > 0 and len(filtered_movies) > 0:
@@ -1020,9 +1041,14 @@ def display_search_page(movies_df, ratings_df):
             
             # Sort results
             if sort_option == "Year (newest first)" and 'year' in filtered_movies.columns:
-                filtered_movies = filtered_movies.sort_values(by='year', ascending=False)
+                # Convert to numeric for sorting
+                filtered_movies['year_numeric'] = pd.to_numeric(filtered_movies['year'], errors='coerce')
+                filtered_movies = filtered_movies.sort_values(by='year_numeric', ascending=False)
+                filtered_movies = filtered_movies.drop('year_numeric', axis=1)
             elif sort_option == "Year (oldest first)" and 'year' in filtered_movies.columns:
-                filtered_movies = filtered_movies.sort_values(by='year', ascending=True)
+                filtered_movies['year_numeric'] = pd.to_numeric(filtered_movies['year'], errors='coerce')
+                filtered_movies = filtered_movies.sort_values(by='year_numeric', ascending=True)
+                filtered_movies = filtered_movies.drop('year_numeric', axis=1)
             elif sort_option == "Rating (highest first)":
                 # Add ratings to movie data
                 movie_ratings = ratings_df.groupby('movie_id')['rating'].mean().reset_index()
@@ -1046,7 +1072,7 @@ def display_search_page(movies_df, ratings_df):
                     cols = st.columns(3)
                     for j in range(3):
                         if i + j < len(filtered_movies):
-                            display_movie_card(filtered_movies.iloc[i + j], cols[j])
+                            display_movie_card(filtered_movies.iloc[i + j], cols[j], section="advanced_search")
                 
                 # Add pagination if many results
                 if len(filtered_movies) > 12:
