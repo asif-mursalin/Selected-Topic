@@ -305,7 +305,7 @@ def get_recommendations_with_model(model, user_id, movies_df, ratings_df, n=10,
     
     # If no movies meet the minimum rating threshold
     if len(predictions) == 0:
-        st.info(f"No recommendations meet your minimum rating of {min_rating}. Showing popular movies instead.")
+        # st.info(f"No recommendations meet your minimum rating of {min_rating}. Showing popular movies instead.")
         return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
     
     # Sort by predicted rating
