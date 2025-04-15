@@ -1,503 +1,268 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import pickle
-import matplotlib.pyplot as plt
-import re
+import os
 from collections import defaultdict
 
 # Set page configuration
 st.set_page_config(
-    page_title="MovieLens Recommender",
+    page_title="Movie Recommender",
     page_icon="🎬",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    layout="wide"
 )
 
-# Apply custom CSS
+# Custom CSS for styling
 st.markdown("""
-    <style>
-    .movie-card {
+<style>
+    .main {
+        padding: 1rem;
+    }
+    .genre-pill {
+        display: inline-block;
+        background-color: #e1f5fe;
+        border-radius: 20px;
+        padding: 4px 12px;
+        margin: 4px;
+        color: #0277bd;
+        font-size: 14px;
+    }
+    .genre-pill-selected {
+        background-color: #0277bd;
+        color: white;
+    }
+    .recommendation-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+    }
+    .recommendation-table th, .recommendation-table td {
         border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 10px;
-        margin-bottom: 10px;
+        padding: 12px;
+    }
+    .recommendation-table th {
+        background-color: #f2f2f2;
+    }
+    .recommendation-table tr:nth-child(even) {
         background-color: #f9f9f9;
     }
     .movie-title {
         font-weight: bold;
-        font-size: 16px;
-        margin-bottom: 5px;
     }
-    .movie-year {
-        color: #666;
-        font-size: 14px;
-    }
-    .movie-genre {
+    .movie-genres {
         font-size: 12px;
-        color: #444;
-        margin-bottom: 5px;
+        color: #555;
     }
-    .rating {
-        color: #ff9900;
-        font-weight: bold;
+    .slider-container {
+        padding: 10px 0;
     }
-    .header-container {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 20px;
-    }
-    .header-title {
-        font-size: 32px;
-        font-weight: bold;
-        margin: 0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+</style>
+""", unsafe_allow_html=True)
 
-# Load MovieLens dataset
-@st.cache_data
+# Load data
+@st.cache_resource
 def load_movie_data():
     """Load movie data from pickle file"""
     try:
-        # Try to load pre-saved pickle data if available
-        if os.path.exists('models/movies_data.pkl'):
-            with open('models/movies_data.pkl', 'rb') as f:
-                movies_df = pickle.load(f)
-                return movies_df
-        else:
-            st.warning("Movie data file not found. Using sample data instead.")
-            return create_sample_movie_data()
-    except Exception as e:
-        st.warning(f"Error loading movie data: {e}. Using sample data instead.")
-        return create_sample_movie_data()
-
-def create_sample_movie_data():
-    """Create a sample movie dataset for demo purposes"""
-    data = {
-        'movie_id': list(range(1, 101)),
-        'title': [f"Sample Movie {i} ({1990 + i % 30})" for i in range(1, 101)],
-        'year': [1990 + i % 30 for i in range(1, 101)],
-        'genre_names': [
-            np.random.choice(['Action', 'Adventure', 'Comedy', 'Drama', 'Romance', 'Sci-Fi', 'Thriller'], 
-                          size=np.random.randint(1, 4), replace=False).tolist()
-            for _ in range(100)
-        ]
-    }
-    return pd.DataFrame(data)
-
-@st.cache_data
-def load_ratings_data():
-    """Load ratings data from CSV or create sample data"""
-    try:
-        # Try to load from CSV if available
-        if os.path.exists('ml-100k/u.data'):
-            ratings_df = pd.read_csv('ml-100k/u.data', sep='\t', 
-                                  names=['user_id', 'movie_id', 'rating', 'timestamp'])
-            return ratings_df
-        else:
-            st.warning("Ratings data file not found. Using sample data instead.")
-            return create_sample_ratings_data()
-    except Exception as e:
-        st.warning(f"Error loading ratings data: {e}. Using sample data instead.")
-        return create_sample_ratings_data()
-
-def create_sample_ratings_data():
-    """Create a sample ratings dataset for demo purposes"""
-    # Create sample data with 1000 ratings
-    user_ids = np.random.choice(range(1, 100), 1000)
-    movie_ids = np.random.choice(range(1, 101), 1000)
-    ratings = np.random.choice([1, 2, 3, 4, 5], 1000, p=[0.1, 0.2, 0.3, 0.25, 0.15])
-    timestamps = np.random.randint(1000000000, 1100000000, 1000)
-    
-    return pd.DataFrame({
-        'user_id': user_ids,
-        'movie_id': movie_ids,
-        'rating': ratings,
-        'timestamp': timestamps
-    })
-
-@st.cache_data
-def load_model_info():
-    """Load model info from pickle file"""
-    try:
-        if os.path.exists('models/model_info.pkl'):
-            with open('models/model_info.pkl', 'rb') as f:
-                model_info = pickle.load(f)
-                return model_info
-        else:
-            st.warning("Model info file not found. Using default values.")
-            return {
-                'model_type': 'SVD (default)',
-                'rmse': 0.935,
-                'precision': 0.36,
-                'recall': 0.29
-            }
-    except Exception as e:
-        st.warning(f"Error loading model info: {e}. Using default values.")
-        return {
-            'model_type': 'SVD (default)',
-            'rmse': 0.935,
-            'precision': 0.36,
-            'recall': 0.29
-        }
-
-def get_movie_recommendations(user_id, movies_df, ratings_df, n=10):
-    """Get movie recommendations for a specific user using pre-computed data
-    or collaborative filtering approach"""
-    
-    # In a real implementation, this would use the pickled model
-    # For this simplified version, we'll use a collaborative filtering approach
-    
-    # Get movies the user has already rated
-    user_rated_movies = ratings_df[ratings_df['user_id'] == user_id]
-    
-    # If the user hasn't rated any movies, return popular movies
-    if len(user_rated_movies) == 0:
-        return get_popular_movies(movies_df, ratings_df, n)
-    
-    # Get all users who rated the same movies as our target user
-    similar_users = ratings_df[ratings_df['movie_id'].isin(user_rated_movies['movie_id'])]
-    similar_users = similar_users[similar_users['user_id'] != user_id]['user_id'].unique()
-    
-    # If no similar users found, return popular movies
-    if len(similar_users) == 0:
-        return get_popular_movies(movies_df, ratings_df, n)
-    
-    # Get movies rated by similar users that target user hasn't rated
-    movies_to_recommend = ratings_df[
-        (ratings_df['user_id'].isin(similar_users)) & 
-        (~ratings_df['movie_id'].isin(user_rated_movies['movie_id']))
-    ]
-    
-    # Calculate average rating for each movie
-    movie_ratings = movies_to_recommend.groupby('movie_id')['rating'].agg(['mean', 'count'])
-    movie_ratings.columns = ['avg_rating', 'count']
-    
-    # Filter out movies with fewer than 3 ratings
-    movie_ratings = movie_ratings[movie_ratings['count'] >= 3]
-    
-    # Sort by average rating
-    movie_ratings = movie_ratings.sort_values(by=['avg_rating', 'count'], ascending=False)
-    
-    # Get top-n movie IDs
-    top_movie_ids = movie_ratings.index[:n].tolist()
-    
-    # Get movie details
-    recommended_movies = movies_df[movies_df['movie_id'].isin(top_movie_ids)]
-    
-    # Add predicted ratings
-    movie_ratings_dict = movie_ratings['avg_rating'].to_dict()
-    recommended_movies['predicted_rating'] = recommended_movies['movie_id'].map(movie_ratings_dict)
-    
-    # Sort by predicted rating
-    recommended_movies = recommended_movies.sort_values(by='predicted_rating', ascending=False)
-    
-    return recommended_movies
-
-def get_popular_movies(movies_df, ratings_df, n=10):
-    """Get popular movies based on average rating and number of ratings"""
-    # Calculate average rating and rating count for each movie
-    movie_stats = ratings_df.groupby('movie_id').agg({
-        'rating': ['mean', 'count']
-    }).reset_index()
-    
-    # Flatten the column hierarchy
-    movie_stats.columns = ['movie_id', 'avg_rating', 'rating_count']
-    
-    # Filter movies with at least 5 ratings
-    popular_movies = movie_stats[movie_stats['rating_count'] >= 5]
-    
-    # Sort by average rating and count
-    popular_movies = popular_movies.sort_values(by=['avg_rating', 'rating_count'], ascending=False)
-    
-    # Get top-n movie IDs
-    top_movie_ids = popular_movies['movie_id'].head(n).tolist()
-    
-    # Get movie details
-    recommended_movies = movies_df[movies_df['movie_id'].isin(top_movie_ids)]
-    
-    # Add average rating
-    movie_ratings = {row['movie_id']: row['avg_rating'] for _, row in popular_movies.iterrows()}
-    recommended_movies['predicted_rating'] = recommended_movies['movie_id'].map(movie_ratings)
-    
-    # Sort by average rating
-    recommended_movies = recommended_movies.sort_values(by='predicted_rating', ascending=False)
-    
-    return recommended_movies
-
-def get_movies_by_genre(movies_df, genre, n=10):
-    """Get movies by genre"""
-    # Filter movies by genre
-    genre_movies = movies_df[movies_df['genre_names'].apply(lambda x: genre in x)]
-    
-    # If no movies found, return empty DataFrame
-    if len(genre_movies) == 0:
+        with open('models/movies_data.pkl', 'rb') as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        st.error("Movie data file not found. Please run the data preparation script first.")
         return pd.DataFrame()
-    
-    # Return top-n movies (or all if less than n)
-    return genre_movies.head(n)
 
-def get_movie_details(movies_df, ratings_df, movie_id):
-    """Get detailed information about a movie"""
-    # Get movie details
-    movie = movies_df[movies_df['movie_id'] == movie_id].iloc[0]
-    
-    # Get movie ratings
-    movie_ratings = ratings_df[ratings_df['movie_id'] == movie_id]['rating']
-    
-    # Calculate rating stats
-    if len(movie_ratings) > 0:
-        avg_rating = movie_ratings.mean()
-        rating_count = len(movie_ratings)
-        rating_dist = movie_ratings.value_counts().sort_index()
-    else:
-        avg_rating = 0
-        rating_count = 0
-        rating_dist = pd.Series([0] * 5, index=[1, 2, 3, 4, 5])
-    
-    return movie, avg_rating, rating_count, rating_dist
+@st.cache_resource
+def load_model():
+    """Load recommendation model from pickle file"""
+    try:
+        with open('models/best_model.pkl', 'rb') as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        st.warning("Model file not found. Using genre-based recommendations instead.")
+        return None
 
-def extract_year_from_title(title):
-    """Extract year from movie title"""
-    match = re.search(r'\((\d{4})\)$', title)
-    if match:
-        return match.group(1)
-    return "Unknown"
-
-def display_movie_card(movie, col, show_prediction=False):
-    """Display a movie card in a Streamlit column"""
-    with col:
-        st.markdown(f"""
-        <div class="movie-card">
-            <div class="movie-title">{movie['title']}</div>
-            <div class="movie-year">{movie['year'] if 'year' in movie else extract_year_from_title(movie['title'])}</div>
-            <div class="movie-genre">{', '.join(movie['genre_names']) if 'genre_names' in movie and isinstance(movie['genre_names'], list) else 'No genres'}</div>
-            {f'<div class="rating">Predicted rating: {movie["predicted_rating"]:.1f}⭐</div>' if show_prediction and 'predicted_rating' in movie else ''}
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button(f"View Details", key=f"view_{movie['movie_id']}"):
-            st.session_state.selected_movie = movie['movie_id']
-            st.session_state.page = "movie_details"
-            st.rerun()
-
-def user_authentication():
-    """Simulated user authentication"""
-    st.sidebar.title("User Authentication")
-    
-    # Check if user is already logged in
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-    
-    if 'user_id' not in st.session_state:
-        st.session_state.user_id = None
-    
-    # If not logged in, show login form
-    if not st.session_state.logged_in:
-        # For demo purposes, let user select from a list of user IDs
-        user_id = st.sidebar.selectbox(
-            "Select User ID (for demo)",
-            options=list(range(1, 11)),
-            index=0,
-            key="login_user_id"
-        )
-        
-        if st.sidebar.button("Login"):
-            st.session_state.logged_in = True
-            st.session_state.user_id = user_id
-            st.sidebar.success(f"Logged in as User {user_id}")
-            st.rerun()
-    else:
-        st.sidebar.success(f"Logged in as User {st.session_state.user_id}")
-        
-        if st.sidebar.button("Logout"):
-            st.session_state.logged_in = False
-            st.session_state.user_id = None
-            st.rerun()
-
-def display_home_page(movies_df, ratings_df, model_info):
-    """Display the home page with recommendations"""
-    # Header
-    st.markdown("""
-    <div class="header-container">
-        <h1 class="header-title">MovieLens Recommender</h1>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # If user is logged in, show personalized recommendations
-    if st.session_state.logged_in:
-        st.subheader(f"Personalized Recommendations for User {st.session_state.user_id}")
-        
-        # Get recommendations
-        recommended_movies = get_movie_recommendations(
-            st.session_state.user_id, movies_df, ratings_df, n=10
-        )
-        
-        # Display recommendations in a grid (3 columns)
-        cols = st.columns(3)
-        for i, (_, movie) in enumerate(recommended_movies.iterrows()):
-            display_movie_card(movie, cols[i % 3], show_prediction=True)
-    
-    # Popular Movies Section
-    st.subheader("Popular Movies")
-    popular_movies = get_popular_movies(movies_df, ratings_df, n=6)
-    
-    # Display popular movies in a grid (3 columns)
-    cols = st.columns(3)
-    for i, (_, movie) in enumerate(popular_movies.iterrows()):
-        display_movie_card(movie, cols[i % 3])
-    
-    # Browse by Genre Section
-    st.subheader("Browse by Genre")
-    
-    # Get all unique genres
-    all_genres = []
+def get_all_genres(movies_df):
+    """Extract all unique genres from the movies dataframe"""
+    all_genres = set()
     for genres in movies_df['genre_names']:
         if isinstance(genres, list):
-            all_genres.extend(genres)
-    all_genres = sorted(list(set(all_genres)))
-    
-    # Create selectbox for genres
-    selected_genre = st.selectbox("Select a genre", all_genres)
-    
-    # Get movies by genre
-    genre_movies = get_movies_by_genre(movies_df, selected_genre, n=6)
-    
-    # Display genre movies in a grid (3 columns)
-    if len(genre_movies) > 0:
-        cols = st.columns(3)
-        for i, (_, movie) in enumerate(genre_movies.iterrows()):
-            display_movie_card(movie, cols[i % 3])
-    else:
-        st.info(f"No movies found in the {selected_genre} genre.")
-    
-    # Show model information in expander
-    with st.expander("Model Information"):
-        st.write(f"**Model Type:** {model_info.get('model_type', 'Unknown')}")
-        st.write(f"**RMSE:** {model_info.get('rmse', 'N/A'):.4f}")
-        st.write(f"**Precision:** {model_info.get('precision', 'N/A'):.4f}")
-        st.write(f"**Recall:** {model_info.get('recall', 'N/A'):.4f}")
+            all_genres.update(genres)
+    return sorted(list(all_genres))
 
-def display_movie_details_page(movies_df, ratings_df):
-    """Display detailed information about a selected movie"""
-    # Get movie ID from session state
-    movie_id = st.session_state.selected_movie
+def recommend_movies(selected_genres, min_rating, movies_df, model=None, top_n=5):
+    """
+    Recommend movies based on selected genres and minimum rating
+    """
+    # Filter by minimum rating
+    filtered_movies = movies_df[movies_df['avg_rating'] >= min_rating]
     
-    # Get movie details
-    movie, avg_rating, rating_count, rating_dist = get_movie_details(movies_df, ratings_df, movie_id)
+    # If no movies meet the criteria
+    if filtered_movies.empty:
+        return pd.DataFrame()
     
-    # Back button
-    if st.button("← Back to Home"):
-        st.session_state.page = "home"
-        st.rerun()
+    # If no genres selected, return top rated movies
+    if not selected_genres:
+        return filtered_movies.sort_values('avg_rating', ascending=False).head(top_n)
     
-    # Movie title and basic info
-    st.title(movie['title'])
+    # Calculate genre matching score
+    def genre_match_score(movie_genres):
+        if not isinstance(movie_genres, list):
+            return 0
+        matching_genres = set(movie_genres).intersection(set(selected_genres))
+        return len(matching_genres) / len(selected_genres) if selected_genres else 0
     
-    col1, col2 = st.columns([3, 1])
+    # Apply scoring function
+    filtered_movies['genre_score'] = filtered_movies['genre_names'].apply(genre_match_score)
     
-    with col1:
-        st.subheader("Movie Information")
-        st.write(f"**Year:** {movie['year'] if 'year' in movie else 'Unknown'}")
-        st.write(f"**Genres:** {', '.join(movie['genre_names']) if 'genre_names' in movie and isinstance(movie['genre_names'], list) else 'No genres'}")
-        
-        # Description placeholder (would be real data in a full implementation)
-        st.write("**Description:**")
-        st.write("This is a placeholder description for the movie. In a real implementation, this would contain the actual movie plot or synopsis.")
+    # Calculate final score (combination of genre match and rating)
+    filtered_movies['final_score'] = (
+        (0.7 * filtered_movies['genre_score']) + 
+        (0.3 * (filtered_movies['avg_rating'] / 5.0))
+    )
     
-    with col2:
-        st.subheader("Rating Information")
-        st.write(f"**Average Rating:** {avg_rating:.1f}/5.0")
-        st.write(f"**Number of Ratings:** {rating_count}")
-        
-        # Rating distribution
-        if rating_count > 0:
-            st.subheader("Rating Distribution")
-            fig, ax = plt.subplots(figsize=(5, 3))
-            ax.bar(rating_dist.index, rating_dist.values, color='skyblue')
-            ax.set_xlabel('Rating')
-            ax.set_ylabel('Count')
-            ax.set_xticks([1, 2, 3, 4, 5])
-            st.pyplot(fig)
+    # Get top recommendations
+    recommendations = filtered_movies.sort_values(
+        ['final_score', 'avg_rating'], 
+        ascending=False
+    ).head(top_n)
     
-    # User rating section
-    if st.session_state.logged_in:
-        st.subheader("Rate This Movie")
-        user_rating = st.slider("Your Rating", 1.0, 5.0, 3.0, 0.5)
-        
-        if st.button("Submit Rating"):
-            st.success(f"Thank you for rating '{movie['title']}' with {user_rating} stars!")
-            # In a real implementation, this would update the ratings data
-
-def display_search_page(movies_df):
-    """Display search page for finding movies"""
-    st.title("Search Movies")
-    
-    # Back button
-    if st.button("← Back to Home"):
-        st.session_state.page = "home"
-        st.rerun()
-    
-    # Search query
-    search_query = st.text_input("Search for movies by title")
-    
-    if search_query:
-        # Search movies by title
-        search_results = movies_df[movies_df['title'].str.contains(search_query, case=False, na=False)]
-        
-        if len(search_results) > 0:
-            st.subheader(f"Found {len(search_results)} results for '{search_query}'")
-            
-            # Display search results in a grid (3 columns)
-            cols = st.columns(3)
-            for i, (_, movie) in enumerate(search_results.head(12).iterrows()):
-                display_movie_card(movie, cols[i % 3])
-        else:
-            st.info(f"No movies found matching '{search_query}'")
+    return recommendations
 
 def main():
-    """Main function for the Streamlit app"""
-    # Initialize session state
-    if 'page' not in st.session_state:
-        st.session_state.page = "home"
-    
-    if 'selected_movie' not in st.session_state:
-        st.session_state.selected_movie = None
-    
-    # User authentication in sidebar
-    user_authentication()
-    
-    # Navigation in sidebar
-    st.sidebar.title("Navigation")
-    
-    if st.sidebar.button("Home"):
-        st.session_state.page = "home"
-        st.rerun()
-    
-    if st.sidebar.button("Search Movies"):
-        st.session_state.page = "search"
-        st.rerun()
-    
     # Load data
     movies_df = load_movie_data()
-    ratings_df = load_ratings_data()
-    model_info = load_model_info()
+    model = load_model()
     
-    # Display info about data
-    with st.sidebar.expander("Dataset Information"):
-        st.write(f"**Movies:** {len(movies_df)}")
-        st.write(f"**Ratings:** {len(ratings_df)}")
-        st.write(f"**Users:** {ratings_df['user_id'].nunique()}")
+    if movies_df.empty:
+        st.error("No movie data available. Please check if the data files are properly prepared.")
+        return
     
-    # Route to appropriate page
-    if st.session_state.page == "home":
-        display_home_page(movies_df, ratings_df, model_info)
-    elif st.session_state.page == "movie_details":
-        display_movie_details_page(movies_df, ratings_df)
-    elif st.session_state.page == "search":
-        display_search_page(movies_df)
+    # App title
+    st.title("Movie Recommender")
+    
+    # Layout with two columns
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Genre selection section
+        st.subheader("Select your favorite genres and rate a movie:")
+        
+        # Get all available genres
+        all_genres = get_all_genres(movies_df)
+        
+        # Initialize session state for selected genres
+        if 'selected_genres' not in st.session_state:
+            st.session_state.selected_genres = []
+        
+        # Display genre selection text
+        st.markdown("**Favorite genres:**")
+        
+        # Create a grid of genre buttons (3 columns)
+        genre_cols = st.columns(3)
+        
+        # Add genre buttons
+        for i, genre in enumerate(all_genres):
+            col_idx = i % 3
+            
+            # Check if genre is selected
+            is_selected = genre in st.session_state.selected_genres
+            
+            # Create button with appropriate styling
+            button_label = f"{genre} ×" if is_selected else genre
+            button_type = "primary" if is_selected else "secondary"
+            
+            if genre_cols[col_idx].button(button_label, key=f"genre_{genre}", type=button_type):
+                # Toggle genre selection
+                if genre in st.session_state.selected_genres:
+                    st.session_state.selected_genres.remove(genre)
+                else:
+                    st.session_state.selected_genres.append(genre)
+                st.rerun()
+        
+        # Minimum rating slider
+        st.markdown("### Minimum Rating:")
+        min_rating = st.slider(
+            "Select minimum rating",
+            min_value=1.0,
+            max_value=5.0,
+            value=3.0,
+            step=0.5,
+            key="min_rating_slider",
+            label_visibility="collapsed"
+        )
+        
+        # Generate recommendations button
+        if st.button("Get Recommendations", type="primary", use_container_width=True):
+            if not st.session_state.selected_genres:
+                st.warning("Please select at least one genre to get personalized recommendations.")
+            
+            # Get recommendations
+            recommendations = recommend_movies(
+                st.session_state.selected_genres,
+                min_rating,
+                movies_df,
+                model,
+                top_n=5
+            )
+            
+            # Store recommendations in session state
+            st.session_state.recommendations = recommendations
+            
+            # Force rerun to display recommendations
+            st.rerun()
+    
+    with col2:
+        # Display selected genres as pills
+        if st.session_state.selected_genres:
+            st.markdown("**Selected genres:**")
+            
+            # Create HTML for genre pills
+            genres_html = ""
+            for genre in st.session_state.selected_genres:
+                genres_html += f'<div class="genre-pill genre-pill-selected">{genre}</div>'
+            
+            st.markdown(genres_html, unsafe_allow_html=True)
+        
+        # Display current minimum rating
+        st.markdown(f"**Minimum rating:** {min_rating} ⭐")
+    
+    # Display recommendations
+    st.markdown("### Recommended Movies:")
+    
+    if 'recommendations' in st.session_state and not st.session_state.recommendations.empty:
+        recommendations = st.session_state.recommendations
+        
+        # Create HTML table for recommendations
+        table_html = """
+        <table class="recommendation-table">
+            <tr>
+                <th>Title</th>
+                <th>Year</th>
+                <th>Rating</th>
+                <th>Genres</th>
+            </tr>
+        """
+        
+        for _, movie in recommendations.iterrows():
+            # Format genres as a string
+            genres_str = ", ".join(movie['genre_names']) if isinstance(movie['genre_names'], list) else ""
+            
+            # Add movie to table
+            table_html += f"""
+            <tr>
+                <td class="movie-title">{movie['title']}</td>
+                <td>{movie['year']}</td>
+                <td>{"⭐" * int(round(movie['avg_rating']))}</td>
+                <td class="movie-genres">{genres_str}</td>
+            </tr>
+            """
+        
+        table_html += "</table>"
+        
+        # Display the table
+        st.markdown(table_html, unsafe_allow_html=True)
+    else:
+        # Show placeholder when no recommendations yet
+        st.info("Select your favorite genres and minimum rating, then click 'Get Recommendations'")
 
 if __name__ == "__main__":
     main()
