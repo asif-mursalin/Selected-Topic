@@ -26,6 +26,12 @@ curl -O https://files.grouplens.org/datasets/movielens/ml-100k.zip
 unzip ml-100k.zip
 ```
 
+For Windows:
+
+- Visit https://files.grouplens.org/datasets/movielens/ml-100k.zip in your browser
+- Save the file to your project directory
+- Right-click the zip file and select "Extract All"
+
 This will create a directory called `ml-100k` containing the dataset files.
 
 ### 3. Create a Virtual Environment (Optional but Recommended)
