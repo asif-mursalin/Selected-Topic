@@ -9,9 +9,7 @@ from collections import defaultdict
 from PIL import Image
 import time
 
-if 'first_load' not in st.session_state:
-    st.session_state.first_load = True
-    st.info("First load may take a moment. Subsequent interactions will be faster.")
+
 
 # Set page configuration
 st.set_page_config(
