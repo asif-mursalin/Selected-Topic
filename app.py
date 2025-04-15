@@ -9,6 +9,10 @@ from collections import defaultdict
 from PIL import Image
 import time
 
+if 'first_load' not in st.session_state:
+    st.session_state.first_load = True
+    st.info("First load may take a moment. Subsequent interactions will be faster.")
+
 # Set page configuration
 st.set_page_config(
     page_title="MovieLens Recommender",
@@ -161,7 +165,7 @@ def create_sample_movie_data():
     
     # Create sample movie data
     data = {
-        'movie_id': list(range(1, 101)),
+        'movie_id': list(range(1, 15)),
         'title': [f"Sample Movie {i}" for i in range(1, 101)],
         'year': [1990 + i % 30 for i in range(1, 101)],
         'genre_names': [genres_list[i % 10] for i in range(100)]
