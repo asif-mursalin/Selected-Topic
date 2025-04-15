@@ -2,3 +2,8 @@ streamlit
 pandas
 numpy
 matplotlib
+pillow
+plotly
+scipy
+joblib
+scikit-learn
