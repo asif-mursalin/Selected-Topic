@@ -163,7 +163,7 @@ def create_sample_movie_data():
     
     # Create sample movie data
     data = {
-        'movie_id': list(range(1, 15)),
+        'movie_id': list(range(1, 100)),
         'title': [f"Sample Movie {i}" for i in range(1, 101)],
         'year': [1990 + i % 30 for i in range(1, 101)],
         'genre_names': [genres_list[i % 10] for i in range(100)]
