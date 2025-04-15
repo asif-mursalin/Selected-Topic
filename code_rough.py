@@ -27,41 +27,62 @@ min_interactions = 5
 # # Load data
 
 # %%
-def load_data(data_dir="ml-32m"):
+def load_data(data_dir="ml-100k"):
     """
-    Load the MovieLens dataset into pandas dataframes.
+    Load MovieLens data from the specified directory.
+    By default, uses the ml-100k dataset.
     """
-    print("Loading data...")
-    start_time = time.time()
-
-    # For large datasets, we can use chunksize parameter to load in batches
-    # But for simplicity in this example, we'll load directly
+    import pandas as pd
+    import os
     
-    # Load ratings with proper dtypes to save memory
-    ratings = pd.read_csv(os.path.join(data_dir, 'ratings.csv'), 
-                          dtype={'userId': np.int32, 'movieId': np.int32, 
-                                 'rating': np.float32, 'timestamp': np.int64})
+    # Check if the specified directory exists, if not try ml-100k
+    if not os.path.exists(data_dir) and data_dir != "ml-100k" and os.path.exists("ml-100k"):
+        print(f"Warning: {data_dir} not found. Using ml-100k instead.")
+        data_dir = "ml-100k"
     
-    # Load movies
-    movies = pd.read_csv(os.path.join(data_dir, 'movies.csv'),
-                         dtype={'movieId': np.int32, 'title': str, 'genres': str})
+    # Load ratings data - use appropriate file format for ml-100k
+    ratings_path = os.path.join(data_dir, "u.data")
+    if os.path.exists(ratings_path):
+        ratings_df = pd.read_csv(ratings_path, sep='\t',
+                               names=['user_id', 'movie_id', 'rating', 'timestamp'])
+    else:
+        raise FileNotFoundError(f"Ratings file not found at {ratings_path}")
     
-    # Load tags (optional, depending on if you need them immediately)
-    tags = pd.read_csv(os.path.join(data_dir, 'tags.csv'),
-                       dtype={'userId': np.int32, 'movieId': np.int32, 
-                              'tag': str, 'timestamp': np.int64})
+    # Load movie data - use appropriate file format for ml-100k
+    movies_path = os.path.join(data_dir, "u.item")
+    if os.path.exists(movies_path):
+        movies_df = pd.read_csv(movies_path, sep='|', encoding='latin-1',
+                              header=None, names=['movie_id', 'title', 'release_date', 'video_release_date',
+                                                'imdb_url'] + [f'genre_{i}' for i in range(19)])
+    else:
+        raise FileNotFoundError(f"Movies file not found at {movies_path}")
     
-    # Load links
-    links = pd.read_csv(os.path.join(data_dir, 'links.csv'),
-                        dtype={'movieId': np.int32, 'imdbId': str, 'tmdbId': str})
+    # Process movie data
+    # Extract year from title
+    movies_df['year'] = movies_df['title'].str.extract(r'\((\d{4})\)$', expand=False)
     
-    elapsed = time.time() - start_time
-    print(f"Data loaded in {elapsed:.2f} seconds")
+    # Create genre list
+    genre_columns = [col for col in movies_df.columns if 'genre_' in col]
+    movies_df['genres'] = movies_df[genre_columns].apply(
+        lambda x: [i for i, v in enumerate(x) if v == 1], axis=1
+    )
     
-    return ratings, movies, tags, links
+    # Map genre indices to names (based on MovieLens 100K documentation)
+    genre_names = ['Unknown', 'Action', 'Adventure', 'Animation', 'Children\'s',
+                  'Comedy', 'Crime', 'Documentary', 'Drama', 'Fantasy', 'Film-Noir',
+                  'Horror', 'Musical', 'Mystery', 'Romance', 'Sci-Fi', 'Thriller',
+                  'War', 'Western']
+    
+    movies_df['genre_names'] = movies_df['genres'].apply(
+        lambda indices: [genre_names[idx] for idx in indices]
+    )
+    
+    print(f"Loaded {len(ratings_df)} ratings and {len(movies_df)} movies from {data_dir}")
+    
+    return ratings_df, movies_df
 
 # %%
-ratings, movies, tags, links = load_data()
+ratings_df, movies_df = load_data()
 
 # %% [markdown]
 # # Basic Stats

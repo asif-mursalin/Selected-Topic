@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 import pickle
+import tensorflow as tf
 import matplotlib.pyplot as plt
 import re
 from collections import defaultdict
@@ -126,23 +127,159 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ===== DATA LOADING FUNCTIONS =====
-
+@st.cache_resource
+def load_neural_model():
+    """Load the neural recommendation model and associated data"""
+    model_dir = "models"
+    model_name = "best_tf_model_neural_collaborative_filtering"
+    
+    try:
+        # Load vocabularies
+        vocab_path = os.path.join(model_dir, f"{model_name}_vocabs.pkl")
+        with open(vocab_path, 'rb') as f:
+            vocabs = pickle.load(f)
+        
+        # Load model metadata
+        metadata_path = os.path.join(model_dir, f"{model_name}_metadata.pkl")
+        if os.path.exists(metadata_path):
+            with open(metadata_path, 'rb') as f:
+                metadata = pickle.load(f)
+            print(f"Loaded model metadata: {metadata}")
+        else:
+            # Default values if metadata not found
+            metadata = {
+                'embedding_dim': 32,
+                'dense_units': [64, 32, 16]
+            }
+        
+        # Create StringLookup layers
+        user_vocab = tf.keras.layers.StringLookup(vocabulary=vocabs['user_vocab'])
+        movie_vocab = tf.keras.layers.StringLookup(vocabulary=vocabs['movie_vocab'])
+        
+        # Recreate the model architecture
+        class NCFModel(tf.keras.Model):
+            def __init__(self):
+                super().__init__()
+                
+                # User embedding
+                self.user_lookup = user_vocab
+                self.user_embedding = tf.keras.layers.Embedding(
+                    len(vocabs['user_vocab']) + 1, 
+                    metadata.get('embedding_dim', 32), 
+                    name="user_embedding")
+                
+                # Movie embedding
+                self.movie_lookup = movie_vocab
+                self.movie_embedding = tf.keras.layers.Embedding(
+                    len(vocabs['movie_vocab']) + 1, 
+                    metadata.get('embedding_dim', 32), 
+                    name="movie_embedding")
+                
+                # Get dense units from metadata or use defaults
+                dense_units = metadata.get('dense_units', [64, 32, 16])
+                
+                # MLP layers
+                self.dense_layers = []
+                for units in dense_units:
+                    self.dense_layers.append(tf.keras.layers.Dense(units, activation='relu'))
+                
+                # Output layer
+                self.rating_pred = tf.keras.layers.Dense(1)
+                
+            def call(self, inputs):
+                # Get user and movie IDs
+                user_id = inputs["user_id"]
+                movie_id = inputs["movie_id"]
+                
+                # Look up embeddings
+                user_embed = self.user_embedding(self.user_lookup(user_id))
+                movie_embed = self.movie_embedding(self.movie_lookup(movie_id))
+                
+                # Concatenate embeddings
+                concat = tf.concat([user_embed, movie_embed], axis=1)
+                
+                # Pass through dense layers
+                x = concat
+                for layer in self.dense_layers:
+                    x = layer(x)
+                    
+                # Output prediction
+                return self.rating_pred(x)
+        
+        # Create model instance
+        model = NCFModel()
+        
+        # Compile the model
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+            loss=tf.keras.losses.MeanSquaredError()
+        )
+        
+        # Build the model with a sample input
+        sample_input = {
+            "user_id": tf.constant(["1"]),
+            "movie_id": tf.constant(["1"])
+        }
+        _ = model(sample_input)
+        
+        # Load weights
+        weights_path = os.path.join(model_dir, f"{model_name}_weights.h5")
+        model.load_weights(weights_path)
+        
+        # Load movie data
+        movie_data_path = os.path.join(model_dir, "movies_data.pkl")
+        with open(movie_data_path, 'rb') as f:
+            movies_df = pickle.load(f)
+        
+        return model, user_vocab, movie_vocab, movies_df
+    
+    except Exception as e:
+        st.error(f"Error loading neural model: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None, None, None, None
 @st.cache_data
 def load_movie_data():
-    """Load movie data from pickle file"""
+    """Load movie information from the MovieLens 100K dataset"""
     try:
-        # Try to load pre-saved pickle data if available
-        if os.path.exists('models/movies_data.pkl'):
-            with open('models/movies_data.pkl', 'rb') as f:
-                movies_df = pickle.load(f)
-                return movies_df
+        # Try to load from standard ml-100k path
+        if os.path.exists('ml-100k/u.item'):
+            movies_df = pd.read_csv('ml-100k/u.item', sep='|', encoding='latin-1', 
+                                   header=None, names=['movie_id', 'title', 'release_date', 'video_release_date', 
+                                                      'imdb_url'] + [f'genre_{i}' for i in range(19)])
+        # Try alternative paths
+        elif os.path.exists('u.item'):
+            movies_df = pd.read_csv('u.item', sep='|', encoding='latin-1', 
+                                   header=None, names=['movie_id', 'title', 'release_date', 'video_release_date', 
+                                                      'imdb_url'] + [f'genre_{i}' for i in range(19)])
         else:
             st.warning("Movie data file not found. Using sample data instead.")
             return create_sample_movie_data()
+            
+        # Extract year from title
+        movies_df['year'] = movies_df['title'].str.extract(r'\((\d{4})\)$', expand=False)
+        
+        # Create genre list
+        genre_columns = [col for col in movies_df.columns if 'genre_' in col]
+        movies_df['genres'] = movies_df[genre_columns].apply(
+            lambda x: [i for i, v in enumerate(x) if v == 1], axis=1
+        )
+        
+        # Map genre indices to names (based on MovieLens 100K documentation)
+        genre_names = ['Unknown', 'Action', 'Adventure', 'Animation', 'Children\'s', 
+                      'Comedy', 'Crime', 'Documentary', 'Drama', 'Fantasy', 'Film-Noir', 
+                      'Horror', 'Musical', 'Mystery', 'Romance', 'Sci-Fi', 'Thriller', 
+                      'War', 'Western']
+        
+        movies_df['genre_names'] = movies_df['genres'].apply(
+            lambda indices: [genre_names[idx] for idx in indices]
+        )
+        
+        return movies_df
     except Exception as e:
         st.warning(f"Error loading movie data: {e}. Using sample data instead.")
         return create_sample_movie_data()
-
+    
 def create_sample_movie_data():
     """Create a sample movie dataset for demo purposes"""
     # Create genres for sample movies
@@ -173,13 +310,109 @@ def create_sample_movie_data():
     
     return pd.DataFrame(data)
 
+def get_neural_recommendations(model, user_id, user_vocab, movie_vocab, movies_df, 
+                               n=10, preferred_genres=None, min_rating=0):
+    """
+    Generate personalized recommendations using the neural model
+    """
+    if model is None:
+        return pd.DataFrame()  # Return empty DataFrame if model not available
+    
+    with st.spinner("Generating neural recommendations..."):
+        try:
+            # Convert user_id to string to match the expected input format
+            user_id = str(user_id)
+            
+            # Get all movie IDs from the vocabulary
+            all_movie_ids = movie_vocab.get_vocabulary()
+            
+            # Create batch inputs for prediction
+            user_ids = tf.repeat(tf.constant([user_id]), len(all_movie_ids))
+            movie_ids = tf.constant(all_movie_ids)
+            
+            # Create input dictionary
+            inputs = {
+                "user_id": user_ids,
+                "movie_id": movie_ids
+            }
+            
+            # Get predictions in batches to avoid memory issues
+            batch_size = 1000  # Adjust based on your available memory
+            all_predictions = []
+            
+            for i in range(0, len(all_movie_ids), batch_size):
+                batch_inputs = {
+                    "user_id": user_ids[i:i+batch_size],
+                    "movie_id": movie_ids[i:i+batch_size]
+                }
+                batch_preds = model(batch_inputs).numpy().flatten()
+                
+                # Store predictions
+                for j, movie_id in enumerate(all_movie_ids[i:i+batch_size]):
+                    all_predictions.append((movie_id, batch_preds[j]))
+            
+            # Filter by minimum rating
+            filtered_predictions = [(movie_id, score) for movie_id, score in all_predictions 
+                                   if score >= min_rating]
+            
+            # Sort by predicted rating (descending)
+            filtered_predictions.sort(key=lambda x: x[1], reverse=True)
+            
+            # Get movie details for top recommendations
+            top_movie_ids = [movie_id for movie_id, _ in filtered_predictions[:n*3]]  # Get more than needed in case of filtering
+            
+            # Convert string IDs to integers for lookup in movies_df
+            int_movie_ids = []
+            for mid in top_movie_ids:
+                try:
+                    int_movie_ids.append(int(mid))
+                except ValueError:
+                    # Skip if not convertible to int
+                    continue
+            
+            # Get movie details
+            recommended_movies = movies_df[movies_df['movie_id'].isin(int_movie_ids)].copy()
+            
+            # Filter by genre if specified
+            if preferred_genres and len(preferred_genres) > 0:
+                genre_filtered = recommended_movies[recommended_movies['genre_names'].apply(
+                    lambda genres: any(genre in genres for genre in preferred_genres))]
+                
+                if len(genre_filtered) > 0:
+                    recommended_movies = genre_filtered
+            
+            # Add predicted ratings
+            pred_rating_dict = {int(mid): score for mid, score in filtered_predictions}
+            recommended_movies['predicted_rating'] = recommended_movies['movie_id'].map(
+                lambda x: pred_rating_dict.get(x, 0)
+            )
+            
+            # Sort by predicted rating and take top n
+            recommended_movies = recommended_movies.sort_values(
+                by='predicted_rating', ascending=False
+            ).head(n)
+            
+            return recommended_movies
+            
+        except Exception as e:
+            st.error(f"Error generating neural recommendations: {e}")
+            import traceback
+            st.error(traceback.format_exc())
+            return pd.DataFrame()
+
+
 @st.cache_data
 def load_ratings_data():
-    """Load ratings data from CSV or create sample data"""
+    """Load ratings data from the MovieLens 100K dataset"""
     try:
-        # Try to load from CSV if available
+        # Try to load from the correct path for ml-100k
         if os.path.exists('ml-100k/u.data'):
             ratings_df = pd.read_csv('ml-100k/u.data', sep='\t', 
+                                  names=['user_id', 'movie_id', 'rating', 'timestamp'])
+            return ratings_df
+        # Fallback to alternative paths
+        elif os.path.exists('u.data'):
+            ratings_df = pd.read_csv('u.data', sep='\t', 
                                   names=['user_id', 'movie_id', 'rating', 'timestamp'])
             return ratings_df
         else:
@@ -206,34 +439,151 @@ def create_sample_ratings_data():
 
 @st.cache_resource
 def load_model():
-    """Load the SVD model from pickle file"""
+    """Load recommendation model - tries neural model first, then falls back to SVD"""
     try:
-        # Try to load SVD model if available
+        # Try to load the neural model first
+        model_dir = "models"
+        model_name = "best_tf_model_neural_collaborative_filtering"
+        
+        # Check if neural model files exist
+        weights_file = os.path.join(model_dir, f"{model_name}_weights.h5")
+        vocab_file = os.path.join(model_dir, f"{model_name}_vocabs.pkl")
+        
+        if os.path.exists(weights_file) and os.path.exists(vocab_file):
+            # Load vocabularies
+            with open(vocab_file, 'rb') as f:
+                vocabs = pickle.load(f)
+            
+            # Create StringLookup layers
+            user_vocab = tf.keras.layers.StringLookup(vocabulary=vocabs['user_vocab'])
+            movie_vocab = tf.keras.layers.StringLookup(vocabulary=vocabs['movie_vocab'])
+            
+            # Recreate the model architecture
+            class NCFModel(tf.keras.Model):
+                def __init__(self):
+                    super().__init__()
+                    
+                    # User embedding
+                    self.user_lookup = user_vocab
+                    self.user_embedding = tf.keras.layers.Embedding(
+                        len(vocabs['user_vocab']) + 1, 32, name="user_embedding")
+                    
+                    # Movie embedding
+                    self.movie_lookup = movie_vocab
+                    self.movie_embedding = tf.keras.layers.Embedding(
+                        len(vocabs['movie_vocab']) + 1, 32, name="movie_embedding")
+                    
+                    # MLP layers
+                    self.dense_layers = [
+                        tf.keras.layers.Dense(64, activation='relu'),
+                        tf.keras.layers.Dense(32, activation='relu'),
+                        tf.keras.layers.Dense(16, activation='relu'),
+                    ]
+                    
+                    # Output layer
+                    self.rating_pred = tf.keras.layers.Dense(1)
+                    
+                def call(self, inputs):
+                    # Get user and movie IDs
+                    user_id = inputs["user_id"]
+                    movie_id = inputs["movie_id"]
+                    
+                    # Look up embeddings
+                    user_embed = self.user_embedding(self.user_lookup(user_id))
+                    movie_embed = self.movie_embedding(self.movie_lookup(movie_id))
+                    
+                    # Concatenate embeddings
+                    concat = tf.concat([user_embed, movie_embed], axis=1)
+                    
+                    # Pass through dense layers
+                    x = concat
+                    for layer in self.dense_layers:
+                        x = layer(x)
+                        
+                    # Output prediction
+                    return self.rating_pred(x)
+            
+            # Create model instance
+            model = NCFModel()
+            
+            # Compile the model
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+                loss=tf.keras.losses.MeanSquaredError()
+            )
+            
+            # Build the model with a sample input
+            sample_input = {
+                "user_id": tf.constant(["1"]),
+                "movie_id": tf.constant(["1"])
+            }
+            _ = model(sample_input)
+            
+            # Load weights
+            model.load_weights(weights_file)
+            
+            # Return model and vocabularies
+            return {"type": "neural", "model": model, "user_vocab": user_vocab, "movie_vocab": movie_vocab}
+        
+        # If neural model not found, try to load SVD model
         if os.path.exists('models/svd_model.pkl'):
             try:
                 with open('models/svd_model.pkl', 'rb') as f:
                     model = pickle.load(f)
-                return model
+                return {"type": "svd", "model": model}
             except ModuleNotFoundError:
                 # Silently fail if surprise module is missing
-                return None
+                return {"type": "none"}
         # Fallback to best model
         elif os.path.exists('models/best_model.pkl'):
             try:
                 with open('models/best_model.pkl', 'rb') as f:
                     model = pickle.load(f)
-                return model
+                return {"type": "svd", "model": model}
             except ModuleNotFoundError:
                 # Silently fail if surprise module is missing
-                return None
+                return {"type": "none"}
         else:
             # Don't display warning to user
-            return None
+            return {"type": "none"}
     except Exception as e:
         # Hide error from user
         print(f"Error loading model: {e}")
-        return None
+        return {"type": "none"}
+
+@st.cache_resource
+def load_model_and_data():
+    """Load the recommendation model and associated data"""
+    model_dir = "models"
+    model_name = "best_tf_model_neural_collaborative_filtering"
     
+    # Load the TensorFlow model
+    model = tf.keras.models.load_model(os.path.join(model_dir, model_name))
+    
+    # Load vocabularies
+    with open(os.path.join(model_dir, f"{model_name}_vocabs.pkl"), 'rb') as f:
+        vocabs = pickle.load(f)
+    
+    # Load movie data
+    with open(os.path.join(model_dir, "movies_data.pkl"), 'rb') as f:
+        movies_df = pickle.load(f)
+    
+    return model, vocabs, movies_df
+
+try:
+    # Load neural model and data
+    model, user_vocab, movie_vocab, movies_df = load_neural_model()
+    
+    if model is None:
+        st.error("Failed to load the neural recommendation model")
+    
+
+except Exception as e:
+    st.error(f"Error: {e}")
+    import traceback
+    st.error(traceback.format_exc())
+    st.info("Ensure that model files and data are in the correct location.")
+
 def get_neural_cf_model_info():
     """
     Return Neural CF model info regardless of what's actually saved
@@ -265,70 +615,245 @@ def predict_rating(model, user_id, movie_id):
     except Exception as e:
         print(f"Error predicting rating: {e}")
         return 0
-
-def get_recommendations_with_model(model, user_id, movies_df, ratings_df, n=10, 
-                                 preferred_genres=None, min_rating=0):
-    """Generate personalized recommendations using the model with genre and rating filters"""
-    
-    # Get movies the user has already rated
-    if user_id in ratings_df['user_id'].values:
-        user_rated_movies = ratings_df[ratings_df['user_id'] == user_id]['movie_id'].tolist()
-    else:
-        user_rated_movies = []
-    
-    # Get all movies the user hasn't rated
-    unwatched_movies = movies_df[~movies_df['movie_id'].isin(user_rated_movies)]
-    
-    # If preferred genres are specified, filter movies
-    if preferred_genres and len(preferred_genres) > 0:
-        genre_filtered_movies = unwatched_movies[unwatched_movies['genre_names'].apply(
-            lambda genres: any(genre in genres for genre in preferred_genres))]
+@st.cache_resource
+def get_neural_model():
+    """
+    Load the neural model silently without creating UI components
+    Returns the model and vocabulary for use in the main app
+    """
+    try:
+        model_dir = "models"
+        model_name = "best_tf_model_neural_collaborative_filtering"
         
-        # If we have movies after genre filtering, use those
-        if len(genre_filtered_movies) > 0:
-            unwatched_movies = genre_filtered_movies
+        # Load vocabularies
+        with open(os.path.join(model_dir, f"{model_name}_vocabs.pkl"), 'rb') as f:
+            vocabs = pickle.load(f)
+        
+        # Create StringLookup layers
+        user_vocab = tf.keras.layers.StringLookup(vocabulary=vocabs['user_vocab'])
+        movie_vocab = tf.keras.layers.StringLookup(vocabulary=vocabs['movie_vocab'])
+        
+        # Recreate the model architecture
+        class NCFModel(tf.keras.Model):
+            def __init__(self):
+                super().__init__()
+                
+                # User embedding
+                self.user_lookup = user_vocab
+                self.user_embedding = tf.keras.layers.Embedding(
+                    len(vocabs['user_vocab']) + 1, 32, name="user_embedding")
+                
+                # Movie embedding
+                self.movie_lookup = movie_vocab
+                self.movie_embedding = tf.keras.layers.Embedding(
+                    len(vocabs['movie_vocab']) + 1, 32, name="movie_embedding")
+                
+                # MLP layers
+                self.dense_layers = [
+                    tf.keras.layers.Dense(64, activation='relu'),
+                    tf.keras.layers.Dense(32, activation='relu'),
+                    tf.keras.layers.Dense(16, activation='relu'),
+                ]
+                
+                # Output layer
+                self.rating_pred = tf.keras.layers.Dense(1)
+                
+            def call(self, inputs):
+                # Get user and movie IDs
+                user_id = inputs["user_id"]
+                movie_id = inputs["movie_id"]
+                
+                # Look up embeddings
+                user_embed = self.user_embedding(self.user_lookup(user_id))
+                movie_embed = self.movie_embedding(self.movie_lookup(movie_id))
+                
+                # Concatenate embeddings
+                concat = tf.concat([user_embed, movie_embed], axis=1)
+                
+                # Pass through dense layers
+                x = concat
+                for layer in self.dense_layers:
+                    x = layer(x)
+                    
+                # Output prediction
+                return self.rating_pred(x)
+        
+        # Create model instance
+        model = NCFModel()
+        
+        # Build the model with a sample input
+        sample_input = {
+            "user_id": tf.constant(["1"]),
+            "movie_id": tf.constant(["1"])
+        }
+        _ = model(sample_input)
+        
+        # Load weights
+        weights_path = os.path.join(model_dir, f"{model_name}_weights.h5")
+        if os.path.exists(weights_path):
+            model.load_weights(weights_path)
+        
+        # Return model and vocabularies without creating any UI elements
+        return {
+            "model": model,
+            "user_vocab": user_vocab,
+            "movie_vocab": movie_vocab,
+            "status": "success"
+        }
+    except Exception as e:
+        print(f"Error loading neural model: {e}")
+        return {"status": "error", "message": str(e)}
     
-    if len(unwatched_movies) == 0:
-        return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
     
-    # Generate predictions for unwatched movies
-    predictions = []
-    with st.spinner("Generating personalized recommendations..."):
-        for _, movie in unwatched_movies.iterrows():
-            movie_id = movie['movie_id']
-            # Predict rating
-            pred_rating = predict_rating(model, user_id, movie_id)
+def get_recommendations_with_model(model_data, user_id, movies_df, ratings_df, n=10, 
+                                 preferred_genres=None, min_rating=0):
+    """Generate personalized recommendations based on model type"""
+    
+    model_type = model_data.get("type", "none")
+    
+    if model_type == "neural":
+        # Neural model recommendations
+        model = model_data["model"]
+        user_vocab = model_data["user_vocab"]
+        movie_vocab = model_data["movie_vocab"]
+        
+        with st.spinner("Generating neural recommendations..."):
+            try:
+                # Convert user_id to string
+                user_id_str = str(user_id)
+                
+                # Check if user exists in vocabulary
+                if user_id_str not in user_vocab.get_vocabulary():
+                    # User not in training data, fall back to popular movies
+                    return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
+                
+                # Get all movie IDs
+                all_movie_ids = movie_vocab.get_vocabulary()
+                
+                # Create batch inputs
+                batch_size = 1000  # Process in batches to avoid memory issues
+                all_predictions = []
+                
+                for i in range(0, len(all_movie_ids), batch_size):
+                    batch_movie_ids = all_movie_ids[i:i+batch_size]
+                    user_ids = tf.constant([user_id_str] * len(batch_movie_ids))
+                    movie_ids = tf.constant(batch_movie_ids)
+                    
+                    # Make predictions
+                    inputs = {
+                        "user_id": user_ids,
+                        "movie_id": movie_ids
+                    }
+                    predictions = model(inputs).numpy().flatten()
+                    
+                    # Store results
+                    for j, pred in enumerate(predictions):
+                        all_predictions.append((batch_movie_ids[j], pred))
+                
+                # Filter by minimum rating
+                filtered_predictions = [(movie_id, rating) for movie_id, rating in all_predictions 
+                                       if rating >= min_rating]
+                
+                # Sort by predicted rating
+                filtered_predictions.sort(key=lambda x: x[1], reverse=True)
+                
+                # Get top movie IDs
+                top_movie_ids = [int(mid) for mid, _ in filtered_predictions[:n*2]]
+                
+                # Get movie details
+                recommended_movies = movies_df[movies_df['movie_id'].isin(top_movie_ids)].copy()
+                
+                # Filter by genre if specified
+                if preferred_genres and len(preferred_genres) > 0:
+                    genre_filtered = recommended_movies[recommended_movies['genre_names'].apply(
+                        lambda genres: any(genre in genres for genre in preferred_genres))]
+                    
+                    if len(genre_filtered) > 0:
+                        recommended_movies = genre_filtered
+                
+                # Add predicted ratings
+                rating_dict = {int(mid): rating for mid, rating in filtered_predictions}
+                recommended_movies['predicted_rating'] = recommended_movies['movie_id'].map(
+                    lambda x: rating_dict.get(x, 0)
+                )
+                
+                # Sort and limit
+                recommended_movies = recommended_movies.sort_values('predicted_rating', ascending=False).head(n)
+                
+                return recommended_movies
+            except Exception as e:
+                print(f"Neural recommendation error: {e}")
+                return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
+    
+    elif model_type == "svd":
+        # SVD model recommendations (existing code)
+        model = model_data["model"]
+        
+        # Get movies the user has already rated
+        if user_id in ratings_df['user_id'].values:
+            user_rated_movies = ratings_df[ratings_df['user_id'] == user_id]['movie_id'].tolist()
+        else:
+            user_rated_movies = []
+        
+        # Get all movies the user hasn't rated
+        unwatched_movies = movies_df[~movies_df['movie_id'].isin(user_rated_movies)]
+        
+        # If preferred genres are specified, filter movies
+        if preferred_genres and len(preferred_genres) > 0:
+            genre_filtered_movies = unwatched_movies[unwatched_movies['genre_names'].apply(
+                lambda genres: any(genre in genres for genre in preferred_genres))]
             
-            # Only include if prediction meets minimum rating
-            if pred_rating >= min_rating:
-                predictions.append((movie_id, pred_rating))
+            # If we have movies after genre filtering, use those
+            if len(genre_filtered_movies) > 0:
+                unwatched_movies = genre_filtered_movies
+        
+        if len(unwatched_movies) == 0:
+            return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
+        
+        # Generate predictions for unwatched movies
+        predictions = []
+        with st.spinner("Generating personalized recommendations..."):
+            for _, movie in unwatched_movies.iterrows():
+                movie_id = movie['movie_id']
+                # Predict rating
+                try:
+                    pred_rating = model.predict(str(user_id), str(movie_id)).est
+                except:
+                    continue
+                
+                # Only include if prediction meets minimum rating
+                if pred_rating >= min_rating:
+                    predictions.append((movie_id, pred_rating))
+        
+        # If no movies meet the minimum rating threshold
+        if len(predictions) == 0:
+            return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
+        
+        # Sort by predicted rating
+        predictions.sort(key=lambda x: x[1], reverse=True)
+        
+        # Get top-n movie IDs
+        top_movie_ids = [movie_id for movie_id, _ in predictions[:n]]
+        
+        # Get movie details
+        recommended_movies = movies_df[movies_df['movie_id'].isin(top_movie_ids)].copy()
+        
+        if len(recommended_movies) == 0:
+            return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
+        
+        # Add predicted ratings
+        movie_ratings = {movie_id: rating for movie_id, rating in predictions}
+        recommended_movies['predicted_rating'] = recommended_movies['movie_id'].map(movie_ratings)
+        
+        # Sort by predicted rating
+        recommended_movies = recommended_movies.sort_values(by='predicted_rating', ascending=False)
+        
+        return recommended_movies
     
-    # If no movies meet the minimum rating threshold
-    if len(predictions) == 0:
-        # st.info(f"No recommendations meet your minimum rating of {min_rating}. Showing popular movies instead.")
+    else:
+        # No model or unknown type, use popular movies
         return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
     
-    # Sort by predicted rating
-    predictions.sort(key=lambda x: x[1], reverse=True)
-    
-    # Get top-n movie IDs
-    top_movie_ids = [movie_id for movie_id, _ in predictions[:n]]
-    
-    # Get movie details
-    recommended_movies = movies_df[movies_df['movie_id'].isin(top_movie_ids)].copy()
-    
-    if len(recommended_movies) == 0:
-        return get_popular_movies(movies_df, ratings_df, n, preferred_genres, min_rating)
-    
-    # Add predicted ratings
-    movie_ratings = {movie_id: rating for movie_id, rating in predictions}
-    recommended_movies['predicted_rating'] = recommended_movies['movie_id'].map(movie_ratings)
-    
-    # Sort by predicted rating
-    recommended_movies = recommended_movies.sort_values(by='predicted_rating', ascending=False)
-    
-    return recommended_movies
-
 def get_popular_movies(movies_df, ratings_df, n=10, preferred_genres=None, min_rating=0):
     """Get popular movies based on average rating and number of ratings with filters"""
     # Calculate average rating and rating count for each movie
@@ -625,7 +1150,7 @@ def user_authentication():
             st.session_state.min_rating = 3.0
             st.rerun()
 
-def display_home_page(movies_df, ratings_df, model, model_info):
+def display_home_page(movies_df, ratings_df, model_data, model_info):
     """Display the home page with recommendations"""
     # Header
     st.markdown("""
@@ -654,7 +1179,7 @@ def display_home_page(movies_df, ratings_df, model, model_info):
         
         # Get recommendations using the model
         recommended_movies = get_recommendations_with_model(
-            model, 
+            model_data, 
             st.session_state.user_id, 
             movies_df, 
             ratings_df, 
@@ -749,7 +1274,7 @@ def display_home_page(movies_df, ratings_df, model, model_info):
         st.info(f"No movies found in the {selected_genre} genre with minimum rating of {min_genre_rating}.")
     
     # Show model information in expander
-    with st.expander("Model Information"):
+    with st.expander("About the Recommendation Model"):
         col1, col2 = st.columns(2)
         
         # Override with Neural CF info regardless of actual model
@@ -1105,8 +1630,16 @@ def main():
     # Load data
     movies_df = load_movie_data()
     ratings_df = load_ratings_data()
-    model = load_model()
-    model_info = get_neural_cf_model_info()  # Always use Neural CF info
+    model_data = load_model()
+    
+    # Get model info for display
+    model_info = get_neural_cf_model_info()  # Use neural CF info for display
+    
+    # Small notification about model type if it loaded
+    if model_data['type'] == 'neural':
+        st.sidebar.success("Using Neural Collaborative Filtering model")
+    elif model_data['type'] == 'svd':
+        st.sidebar.success("Using Matrix Factorization model")
     
     # Display info about data
     with st.sidebar.expander("Dataset Information"):
@@ -1135,9 +1668,9 @@ def main():
     
     # Route to appropriate page
     if st.session_state.page == "home":
-        display_home_page(movies_df, ratings_df, model, model_info)
+        display_home_page(movies_df, ratings_df, model_data, model_info)
     elif st.session_state.page == "movie_details":
-        display_movie_details_page(movies_df, ratings_df, model)
+        display_movie_details_page(movies_df, ratings_df, model_data)
     elif st.session_state.page == "search":
         display_search_page(movies_df, ratings_df)
 
