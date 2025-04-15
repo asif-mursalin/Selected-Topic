@@ -9,8 +9,6 @@ from collections import defaultdict
 from PIL import Image
 import time
 
-
-
 # Set page configuration
 st.set_page_config(
     page_title="MovieLens Recommender",
@@ -163,7 +161,7 @@ def create_sample_movie_data():
     
     # Create sample movie data
     data = {
-        'movie_id': list(range(1, 100)),
+        'movie_id': list(range(1, 101)),
         'title': [f"Sample Movie {i}" for i in range(1, 101)],
         'year': [1990 + i % 30 for i in range(1, 101)],
         'genre_names': [genres_list[i % 10] for i in range(100)]
@@ -534,7 +532,7 @@ def user_authentication():
         st.session_state.preferred_genres = []
         
     if 'min_rating' not in st.session_state:
-        st.session_state.min_rating = 0.0
+        st.session_state.min_rating = 3.0
     
     # If not logged in, show login form
     if not st.session_state.logged_in:
@@ -608,7 +606,7 @@ def user_authentication():
             "Minimum Rating",
             min_value=0.0,
             max_value=5.0,
-            value=0 if 'min_rating' not in st.session_state else st.session_state.min_rating,
+            value=st.session_state.min_rating,
             step=0.5,
             help="Only show movies with predicted ratings at or above this value"
         )
@@ -906,8 +904,6 @@ def display_movie_details_page(movies_df, ratings_df, model):
             # For demo purposes, let's just show how this would affect recommendations
             st.info("Your recommendations will be updated based on this rating.")
 
-# Fix for the display_search_page function
-
 def display_search_page(movies_df, ratings_df):
     """Display search page for finding movies"""
     st.title("Search Movies")
@@ -1081,6 +1077,7 @@ def display_search_page(movies_df, ratings_df):
                     st.info(f"Showing 12 of {len(filtered_movies)} results. Use more specific filters to narrow down your search.")
             else:
                 st.info("No movies found matching your criteria.")
+
 
 def main():
     """Main function for the Streamlit app"""
